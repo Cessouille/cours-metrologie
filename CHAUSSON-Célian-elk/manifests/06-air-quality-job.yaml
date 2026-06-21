@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: air-quality-importer
+  namespace: elk
+spec:
+  template:
+    metadata:
+      labels:
+        job: air-quality-importer
+    spec:
+      containers:
+        - name: importer
+          image: air-quality-importer:v1.0.0
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: datasets
+              mountPath: /app/datasets
+          resources:
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+      restartPolicy: OnFailure
+      volumes:
+        - name: datasets
+          hostPath:
+            path: /datasets
+            type: Directory
+  backoffLimit: 3

@@ -1,0 +1,12 @@
+{
+  "name": "elk-demo-app",
+  "version": "1.0.0",
+  "description": "Custom Node.js application logging in structured JSON for the ELK Stack",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

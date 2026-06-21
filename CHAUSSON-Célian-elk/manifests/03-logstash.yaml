@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: elk
+data:
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    xpack.monitoring.enabled: false
+
+  logstash.conf: |
+    input {
+      beats {
+        port => 5044
+      }
+    }
+
+    filter {
+      # Identify logs originating from our demo application container
+      if [kubernetes][container][name] == "demo-app" or [log][file][path] =~ "demo-app" {
+        # Parse the structured JSON message field
+        json {
+          source => "message"
+          target => "app"
+        }
+
+        # If JSON parsing was successful, promote application fields to root level
+        if [app][timestamp] {
+          mutate {
+            add_field => {
+              "[@metadata][target_index]" => "app-logs"
+              "level" => "%{[app][level]}"
+              "msg" => "%{[app][message]}"
+              "app_message" => "%{[app][message]}"
+              "queue_backlog" => "%{[app][queue_backlog]}"
+            }
+          }
+          mutate {
+            convert => {
+              "queue_backlog" => "integer"
+            }
+          }
+
+          # Check if this is an HTTP request log with specific metrics
+          if [app][status_code] {
+            mutate {
+              add_field => {
+                "method" => "%{[app][method]}"
+                "path" => "%{[app][path]}"
+                "http_path" => "%{[app][path]}"
+                "status_code" => "%{[app][status_code]}"
+                "request_id" => "%{[app][request_id]}"
+                "duration_ms" => "%{[app][duration_ms]}"
+              }
+            }
+            mutate {
+              convert => {
+                "status_code" => "integer"
+                "duration_ms" => "float"
+              }
+            }
+
+            # Compute HTTP status family for dashboard visualizations
+            if [status_code] {
+              if [status_code] >= 200 and [status_code] < 300 {
+                mutate { add_field => { "http_status_family" => "2xx" } }
+              } else if [status_code] >= 400 and [status_code] < 500 {
+                mutate { add_field => { "http_status_family" => "4xx" } }
+              } else if [status_code] >= 500 and [status_code] < 600 {
+                mutate { add_field => { "http_status_family" => "5xx" } }
+              }
+            }
+          }
+        } else {
+          # Fallback for unexpected non-JSON logs from our app
+          mutate {
+            add_field => { "[@metadata][target_index]" => "app-logs" }
+          }
+        }
+      } else {
+        # Technical/infrastructure logs go to a separate system index
+        mutate {
+          add_field => { "[@metadata][target_index]" => "system-logs" }
+        }
+      }
+    }
+
+    output {
+      elasticsearch {
+        hosts => ["http://elasticsearch:9200"]
+        index => "%{[@metadata][target_index]}-%{+YYYY.MM.dd}"
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: elk
+  labels:
+    app: logstash
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logstash
+  template:
+    metadata:
+      labels:
+        app: logstash
+    spec:
+      containers:
+        - name: logstash
+          image: docker.elastic.co/logstash/logstash:8.19.16
+          env:
+            - name: LS_JAVA_OPTS
+              value: "-Xms256m -Xmx256m"
+          ports:
+            - containerPort: 5044
+              name: beats
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: config-volume
+              mountPath: /usr/share/logstash/config/logstash.yml
+              subPath: logstash.yml
+            - name: pipeline-volume
+              mountPath: /usr/share/logstash/pipeline/logstash.conf
+              subPath: logstash.conf
+      volumes:
+        - name: config-volume
+          configMap:
+            name: logstash-config
+            items:
+              - key: logstash.yml
+                path: logstash.yml
+        - name: pipeline-volume
+          configMap:
+            name: logstash-config
+            items:
+              - key: logstash.conf
+                path: logstash.conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: logstash
+  namespace: elk
+  labels:
+    app: logstash
+spec:
+  ports:
+    - port: 5044
+      targetPort: 5044
+      name: beats
+  selector:
+    app: logstash

@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kibana-setup
+  namespace: elk
+spec:
+  template:
+    metadata:
+      labels:
+        app: kibana-setup
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: kibana-setup
+          image: curlimages/curl:8.8.0
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Kibana to be ready..."
+              until curl -sf "http://kibana:5601/api/status" | grep -q '"level":"available"'; do
+                echo "Kibana is not available yet, sleeping 5s..."
+                sleep 5
+              done
+              echo "Kibana is ready! Importing saved objects..."
+              curl -sf -X POST "http://kibana:5601/api/saved_objects/_import?overwrite=true" \
+                -H "kbn-xsrf: true" \
+                --form file=@/kibana/export.ndjson
+          volumeMounts:
+            - name: kibana-export
+              mountPath: /kibana
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "50m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+      volumes:
+        - name: kibana-export
+          hostPath:
+            path: /kibana
+            type: Directory
+  backoffLimit: 8
